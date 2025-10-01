@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Puzzle pour enfants – HTML seul</title>
+<style>
+  :root{
+    --bg:#0b1220; --fg:#f4f8ff; --muted:#9fb0c6; --card:#152238; --accent:#6dd3ff;
+    --tile:#1c2f4a; --good:#1ec28b; --warn:#ffcc00;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:linear-gradient(180deg,#0b1220 0%,#101a2a 100%);color:var(--fg);font-family:system-ui,Segoe UI,Arial,sans-serif}
+  .wrap{max-width:980px;margin:24px auto;padding:16px}
+  h1{margin:0 0 10px;font-size:clamp(1.2rem,2.5vw,1.6rem)}
+  .row{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+  .card{background:var(--card);border-radius:18px;padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.28)}
+  .board-wrap{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;margin-top:12px}
+  .board{position:relative;width:min(90vw,480px);aspect-ratio:1/1;display:grid;background:#0d1626;border-radius:18px;overflow:hidden;border:2px solid #233757}
+  .tile{
+    background-color:var(--tile);
+    background-repeat:no-repeat;         /* important */
+    background-position:center;          /* sera remplacé dynamiquement */
+    background-size:cover;               /* sera remplacé dynamiquement */
+    color:#fff;display:grid;place-items:center;
+    font-weight:900;font-size:clamp(18px,4.5vw,30px);
+    border:1px solid #22314a;user-select:none;touch-action:manipulation;
+  }
+  .tile.dragging{opacity:.8;outline:3px dashed var(--accent)}
+  .tile.correct{box-shadow:inset 0 0 0 3px rgba(30,194,139,.9)}
+  .controls{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+  button, select, .file-btn{
+    background:var(--accent);color:#061120;border:0;border-radius:12px;padding:10px 12px;font-weight:700;cursor:pointer
+  }
+  select{appearance:none}
+  button.secondary{background:#284162;color:var(--fg)}
+  .stat{background:#0f1b2d;border:1px solid #22314a;border-radius:12px;padding:8px 10px;color:var(--muted)}
+  .thumb{width:min(24vw,140px);aspect-ratio:1/1;border-radius:14px;overflow:hidden;border:2px dashed #2a3c5a;background:#0e1728}
+  .thumb>div{width:100%;height:100%;background-size:cover;background-position:center}
+  .hint{color:var(--muted);font-size:.9rem}
+  .celebrate{position:absolute;inset:0;pointer-events:none;display:none;place-items:center;background:rgba(0,0,0,.35)}
+  .celebrate.on{display:grid;animation:pop .6s ease}
+  .celebrate h2{background:#fff;color:#0b1220;padding:10px 16px;border-radius:14px}
+  @keyframes pop{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}
+  input[type=file]{display:none}
+  .file-btn{display:inline-block;text-align:center}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🧩 Puzzle pour enfants</h1>
+
+    <div class="card">
+      <div class="controls row">
+        <label class="file-btn" for="fileInput">📷 Choisir une image</label>
+        <input id="fileInput" type="file" accept="image/*">
+        <select id="sizeSel" title="Difficulté">
+          <option value="2">Facile (2×2)</option>
+          <option value="3" selected>Moyen (3×3)</option>
+          <option value="4">Difficile (4×4)</option>
+        </select>
+        <button id="shuffleBtn">🔀 Mélanger & démarrer</button>
+        <button id="hintBtn" class="secondary">👀 Indice</button>
+        <button id="resetBtn" class="secondary">♻️ Remettre</button>
+
+        <div class="stat" id="moves">👣 Coups : 0</div>
+        <div class="stat" id="timer">⏱️ Temps : 00:00</div>
+      </div>
+
+      <div class="board-wrap">
+        <div id="board" class="board"></div>
+        <div>
+          <div class="thumb"><div id="thumb"></div></div>
+          <p class="hint">Astuce : tape une tuile puis une autre pour les échanger (ou glisse-dépose). Reconstitue l’image 🎉</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <template id="confettiTpl">
+    <div class="celebrate" id="celebrate">
+      <h2>Bravo ! 🎉</h2>
+    </div>
+  </template>
+
+<script>
+(() => {
+  // --- Image par défaut (SVG en data URL) ---
+  const defaultSVG = encodeURIComponent(`
+    <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 600'>
+      <defs><linearGradient id='g' x1='0' y1='0' x2='0' y2='1'>
+        <stop offset='0%' stop-color='#b3e5ff'/><stop offset='100%' stop-color='#7ac8ff'/></linearGradient></defs>
+      <rect width='600' height='600' fill='url(#g)'/>
+      <circle cx='500' cy='90' r='50' fill='#ffeb3b'/>
+      <g fill='#fff' opacity='.9'>
+        <ellipse cx='160' cy='140' rx='90' ry='50'/><ellipse cx='220' cy='140' rx='70' ry='40'/>
+      </g>
+      <rect x='100' y='300' width='400' height='200' fill='#ffb74d'/>
+      <polygon points='100,300 300,180 500,300' fill='#ef6c00'/>
+      <rect x='180' y='380' width='80' height='120' fill='#5d4037'/>
+      <rect x='320' y='360' width='120' height='100' fill='#90caf9'/>
+      <line x1='380' y1='360' x2='380' y2='460' stroke='#64b5f6' stroke-width='6'/>
+      <line x1='320' y1='410' x2='440' y2='410' stroke='#64b5f6' stroke-width='6'/>
+      <circle cx='520' cy='520' r='30' fill='#66bb6a'/>
+      <rect x='0' y='500' width='600' height='100' fill='#81c784'/>
+    </svg>`);
+  let imageURL = `data:image/svg+xml,${defaultSVG}`;
+
+  // --- Éléments ---
+  const board = document.getElementById('board');
+  const thumb = document.getElementById('thumb');
+  const sizeSel = document.getElementById('sizeSel');
+  const fileInput = document.getElementById('fileInput');
+  const shuffleBtn = document.getElementById('shuffleBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const hintBtn = document.getElementById('hintBtn');
+  const movesEl = document.getElementById('moves');
+  const timerEl = document.getElementById('timer');
+  const confettiTpl = document.getElementById('confettiTpl');
+
+  // --- État ---
+  let N = parseInt(sizeSel.value, 10);
+  let order = [];            // permutation actuelle (0..N*N-1)
+  let firstPick = null;
+  let moves = 0;
+  let timer = 0, tick = null;
+  let playing = false;
+  let celebrateLayer = null;
+
+  // --- Utilitaires ---
+  const pad = n => String(n).padStart(2,'0');
+  function updateHUD(){
+    movesEl.textContent = `👣 Coups : ${moves}`;
+    const m = Math.floor(timer/60), s = timer%60;
+    timerEl.textContent = `⏱️ Temps : ${pad(m)}:${pad(s)}`;
+  }
+  function startTimer(){
+    if (tick) clearInterval(tick);
+    timer = 0;
+    tick = setInterval(()=>{ if(playing){ timer++; updateHUD(); } },1000);
+  }
+  function stopTimer(){
+    if (tick){ clearInterval(tick); tick=null; }
+  }
+  function isSolved(){ return order.every((v,i)=>v===i); }
+
+  function showCelebrate(){
+    if (!celebrateLayer){
+      celebrateLayer = confettiTpl.content.firstElementChild.cloneNode(true);
+      board.appendChild(celebrateLayer);
+    }
+    celebrateLayer.classList.add('on');
+    // confettis emoji rapides
+    for(let i=0;i<40;i++){
+      const sp = document.createElement('div');
+      sp.textContent = ["🎈","🎉","✨","⭐","💫","🎊"][Math.floor(Math.random()*6)];
+      sp.style.position='absolute';
+      sp.style.left = Math.random()*100+'%';
+      sp.style.top = '-10%';
+      sp.style.fontSize = (16+Math.random()*24)+'px';
+      sp.style.animation = `fall${i} 1.2s ease-in forwards`;
+      celebrateLayer.appendChild(sp);
+      const dx = (Math.random()-.5)*40;
+      const style = document.createElement('style');
+      style.textContent = `
+        @keyframes fall${i}{
+          to { transform: translate(${dx}px, 120vh) rotate(${(Math.random()*360)|0}deg); opacity:.9; }
+        }`;
+      document.head.appendChild(style);
+      setTimeout(()=>style.remove(),1500);
+      setTimeout(()=>sp.remove(),1400);
+    }
+    setTimeout(()=>celebrateLayer.classList.remove('on'),1200);
+  }
+
+  // --- Construction du plateau ---
+  function build(){
+    board.innerHTML = '';
+    celebrateLayer = null;
+
+    // grille
+    board.style.gridTemplateColumns = `repeat(${N}, 1fr)`;
+    board.style.gridTemplateRows = `repeat(${N}, 1fr)`;
+
+    order = Array.from({length:N*N}, (_,i)=>i);
+
+    for (let i=0;i<N*N;i++){
+      const tile = document.createElement('div');
+      tile.className = 'tile';
+      tile.draggable = true;
+      tile.dataset.home = i; // position correcte (index)
+
+      // position cible dans l'image (ligne/col de la tuile source)
+      const r = Math.floor(i/N), c = i%N;
+
+      // clé : chaque tuile utilise l'image complète mais
+      // background-size est N× plus grand pour "zoomer",
+      // et background-position cible le morceau.
+      tile.style.backgroundImage = `url("${imageURL}")`;
+      tile.style.backgroundSize = `${N*100}% ${N*100}%`;              // *** correction ***
+      tile.style.backgroundPosition = `${(c/(N-1))*100}% ${(r/(N-1))*100}%`; // *** correction ***
+
+      // interactions
+      tile.addEventListener('click', ()=>onPick(tile));
+      tile.addEventListener('dragstart', ev=>{
+        tile.classList.add('dragging');
+        ev.dataTransfer.setData('text/plain', String(getIndexFromTile(tile)));
+      });
+      tile.addEventListener('dragend', ()=>tile.classList.remove('dragging'));
+      tile.addEventListener('dragover', ev=>ev.preventDefault());
+      tile.addEventListener('drop', ev=>{
+        ev.preventDefault();
+        const from = parseInt(ev.dataTransfer.getData('text/plain'),10);
+        const to = getIndexFromTile(tile);
+        swap(from, to);
+      });
+
+      board.appendChild(tile);
+    }
+
+    // couche célébration
+    const layer = confettiTpl.content.firstElementChild.cloneNode(true);
+    board.appendChild(layer); celebrateLayer = layer;
+
+    layoutTiles();
+    thumb.style.backgroundImage = `url("${imageURL}")`;
+  }
+
+  function layoutTiles(){
+    // place les fonds selon ordre actuel
+    const tiles = [...board.children].filter(n=>n.classList.contains('tile'));
+    tiles.forEach((node, gridIndex)=>{
+      const pieceIndex = order[gridIndex];
+      const r = Math.floor(pieceIndex/N), c = pieceIndex%N;
+      node.style.backgroundSize = `${N*100}% ${N*100}%`;
+      node.style.backgroundPosition = `${(c/(N-1))*100}% ${(r/(N-1))*100}%`;
+      node.classList.toggle('correct', pieceIndex===gridIndex);
+    });
+  }
+
+  function getIndexFromTile(tile){
+    return [...board.children].filter(n=>n.classList.contains('tile')).indexOf(tile);
+  }
+
+  function onPick(tile){
+    const idx = getIndexFromTile(tile);
+    if(firstPick===null){
+      firstPick = idx;
+      tile.style.outline = '3px solid var(--warn)';
+      return;
+    }
+    if(firstPick===idx){
+      tile.style.outline = '';
+      firstPick=null; return;
+    }
+    swap(firstPick, idx);
+    const t1 = [...board.children].filter(n=>n.classList.contains('tile'))[firstPick];
+    if (t1) t1.style.outline='';
+    firstPick = null;
+  }
+
+  function swap(a,b){
+    [order[a], order[b]] = [order[b], order[a]];
+    moves++; updateHUD();
+    layoutTiles();
+    if (isSolved()){
+      playing=false; showCelebrate(); stopTimer();
+    }
+  }
+
+  function fisherYates(arr){
+    for(let i=arr.length-1;i>0;i--){
+      const j = Math.floor(Math.random()*(i+1));
+      [arr[i],arr[j]]=[arr[j],arr[i]];
+    }
+    return arr;
+  }
+
+  function shuffle(){
+    let tries=0;
+    do{ order = fisherYates([...order]); tries++; }
+    while(isSolved() && tries<5);
+    moves=0; updateHUD();
+    layoutTiles();
+    playing=true; startTimer();
+  }
+
+  // --- Actions UI ---
+  sizeSel.addEventListener('change', ()=>{
+    N = parseInt(sizeSel.value,10);
+    build(); shuffle();
+  });
+
+  shuffleBtn.addEventListener('click', ()=>shuffle());
+
+  resetBtn.addEventListener('click', ()=>{
+    build(); moves=0; updateHUD(); playing=false; stopTimer();
+  });
+
+  let hintVisible = true;
+  hintBtn.addEventListener('click', ()=>{
+    hintVisible = !hintVisible;
+    document.querySelector('.thumb').style.opacity = hintVisible ? '1' : '.15';
+    hintBtn.textContent = hintVisible ? '👀 Indice' : '🙈 Masquer l’indice';
+  });
+
+  fileInput.addEventListener('change', async (e)=>{
+    const f = e.target.files?.[0]; if(!f) return;
+    const url = await fileToDataURL(f);
+    imageURL = url;
+    build(); shuffle();
+  });
+
+  function fileToDataURL(file){
+    return new Promise((res,rej)=>{
+      const r = new FileReader();
+      r.onload = () => res(r.result);
+      r.onerror = rej;
+      r.readAsDataURL(file);
+    });
+  }
+
+  // --- Init ---
+  build(); shuffle();
+})();
+</script>
+</body>
+</html>
