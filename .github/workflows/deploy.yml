@@ -1,16 +1,13 @@
-
 name: APK puzzle_enfant
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Recuperer le projet
         uses: actions/checkout@v4
@@ -29,112 +26,70 @@ jobs:
       - name: Configurer Android SDK
         shell: bash
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+          sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
 
       - name: Installer Cordova
         run: npm install -g cordova@12
 
-      - name: Creer application
+      - name: Creer application Android
         run: |
           cordova create application com.absabefi.puzzleenfant puzzle_enfant
           cd application
           cordova platform add android@14
 
-      - name: Copier les fichiers
+      - name: Copier le jeu et creer les icones
+        shell: bash
         run: |
+          set -e
+          test -f index.html
+          test -f 'puzzle enfant.jpg'
           cp index.html application/www/index.html
-
-          if [ -d assets ]; then
-            cp -R assets application/www/
-          fi
-
-      - name: Preparer icone Android
-        run: |
-          python3 -m pip install Pillow
-
+          python3 -m pip install --user Pillow
           python3 - <<'PY'
-          from PIL import Image
+          from PIL import Image, ImageOps
           from pathlib import Path
-
-          source = Path("puzzle enfant.jpg")
-          if not source.exists():
-              raise FileNotFoundError(
-                  "Image introuvable: puzzle enfant.jpg"
-              )
-
-          img = Image.open(source).convert("RGBA")
-          img = img.resize((1024, 1024))
-
-          sizes = {
-              "ldpi": 36,
-              "mdpi": 48,
-              "hdpi": 72,
-              "xhdpi": 96,
-              "xxhdpi": 144,
-              "xxxhdpi": 192
-          }
-
-          folder = Path("application/res/icons/android")
+          source = Image.open('puzzle enfant.jpg').convert('RGB')
+          source = ImageOps.fit(source, (1024, 1024), method=Image.Resampling.LANCZOS)
+          folder = Path('application/res/icons/android')
           folder.mkdir(parents=True, exist_ok=True)
-
-          for density, size in sizes.items():
-              icon = img.resize((size, size))
-              icon.save(folder / f"{density}.png")
+          for density, size in {'ldpi':36,'mdpi':48,'hdpi':72,'xhdpi':96,'xxhdpi':144,'xxxhdpi':192}.items():
+              source.resize((size,size), Image.Resampling.LANCZOS).save(folder / f'{density}.png')
           PY
 
-      - name: Configurer icones Cordova
+      - name: Configurer les icones Android
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import xml.etree.ElementTree as ET
-
-          path = Path("application/config.xml")
-          ns = "http://www.w3.org/ns/widgets"
-          ET.register_namespace("", ns)
-          root = ET.parse(path).getroot()
-
-          platform = ET.SubElement(
-              root, f"{{{ns}}}platform",
-              {"name": "android"}
-          )
-
-          for density in [
-              "ldpi", "mdpi", "hdpi",
-              "xhdpi", "xxhdpi", "xxxhdpi"
-          ]:
-              ET.SubElement(
-                  platform, f"{{{ns}}}icon",
-                  {
-                      "density": density,
-                      "src": f"res/icons/android/{density}.png"
-                  }
-              )
-
-          ET.ElementTree(root).write(
-              path,
-              encoding="utf-8",
-              xml_declaration=True
-          )
+          path = Path('application/config.xml')
+          ns = 'http://www.w3.org/ns/widgets'
+          ET.register_namespace('', ns)
+          tree = ET.parse(path)
+          root = tree.getroot()
+          platform = next((x for x in root if x.tag == f'{{{ns}}}platform' and x.get('name') == 'android'), None)
+          if platform is None:
+              platform = ET.SubElement(root, f'{{{ns}}}platform', {'name':'android'})
+          for density in ('ldpi','mdpi','hdpi','xhdpi','xxhdpi','xxxhdpi'):
+              ET.SubElement(platform, f'{{{ns}}}icon', {'density':density,'src':f'res/icons/android/{density}.png'})
+          tree.write(path, encoding='utf-8', xml_declaration=True)
           PY
 
       - name: Construire APK
         run: |
           cd application
+          cordova prepare android
           cordova build android --debug
 
-      - name: Renommer APK
+      - name: Preparer APK
         run: |
           mkdir -p output
-          cp application/platforms/android/app/build/outputs/apk/debug/app-debug.apk \
-             output/puzzle_enfant.apk
+          cp application/platforms/android/app/build/outputs/apk/debug/app-debug.apk output/puzzle_enfant.apk
 
       - name: Publier APK
         uses: actions/upload-artifact@v4
         with:
           name: puzzle_enfant
           path: output/puzzle_enfant.apk
+          if-no-files-found: error
