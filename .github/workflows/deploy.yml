@@ -1,38 +1,94 @@
-name: Deploy to GitHub Pages
+
+name: APK puzzle_enfant
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
 
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Recuperer le projet
         uses: actions/checkout@v4
 
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload site artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Installer Node.js
+        uses: actions/setup-node@v4
         with:
-          path: .
+          node-version: '22'
 
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Installer Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Installer Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Installer Cordova
+        run: npm install -g cordova@12
+
+      - name: Creer application Android
+        run: |
+          cordova create application com.absabefi.puzzleenfant puzzle_enfant
+          cd application
+          cordova platform add android
+
+      - name: Copier le jeu et preparer l'icone
+        run: |
+          cp index.html application/www/index.html
+          python3 -m pip install Pillow
+
+          python3 - <<'PY'
+          from PIL import Image
+          from pathlib import Path
+
+          source = Path("puzzle enfant.jpg")
+          if not source.is_file():
+              raise FileNotFoundError(source)
+
+          image = Image.open(source).convert("RGBA")
+          image = image.resize((1024, 1024))
+          image.save("application/icon.png")
+          PY
+
+      - name: Configurer icone Android
+        run: |
+          cd application
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          path = Path("config.xml")
+          ET.register_namespace("", "http://www.w3.org/ns/widgets")
+          root = ET.parse(path).getroot()
+          ns = "{http://www.w3.org/ns/widgets}"
+
+          icon = ET.Element(ns + "icon")
+          icon.set("src", "icon.png")
+          root.append(icon)
+
+          ET.ElementTree(root).write(
+              path, encoding="utf-8", xml_declaration=True
+          )
+          PY
+
+      - name: Construire APK
+        run: |
+          cd application
+          cordova build android --debug
+
+      - name: Renommer APK
+        run: |
+          mkdir -p output
+          cp application/platforms/android/app/build/outputs/apk/debug/app-debug.apk output/puzzle_enfant.apk
+
+      - name: Telecharger APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: puzzle_enfant
+          path: output/puzzle_enfant.apk
