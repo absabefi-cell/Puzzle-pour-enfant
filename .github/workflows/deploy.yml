@@ -1,13 +1,26 @@
-name: APK puzzle_enfant
+# Genere par Generateur universel APK
+# Depot de reference : depot actuel | Branche de reference : main
+# Place ce fichier dans .github/workflows/android.yml du depot de l'application.
+name: "APK Puzzle_enfant"
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build-apk:
+    runs-on: ubuntu-24.04
+    env:
+      APP_NAME: "Puzzle_enfant"
+      APP_ID: "com.absabefi.puzzleenfant"
+      APP_VERSION: "1.0.0"
+      APP_VERSION_CODE: "1000000"
+      SOURCE_DIR: "."
+      ICON_PATH: "puzzle enfant.jpg"
+      XML_OPTIONS: "[\"<access origin=\\\"*\\\" />\",\"<allow-navigation href=\\\"https://*/*\\\" />\",\"<allow-navigation href=\\\"http://*/*\\\" />\"]"
+
     steps:
       - name: Recuperer le projet
         uses: actions/checkout@v4
@@ -15,81 +28,107 @@ jobs:
       - name: Installer Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
 
-      - name: Installer Java 17
+      - name: Installer Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
-      - name: Configurer Android SDK
+      - name: Preparer Android SDK
         shell: bash
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
-          sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+          set -euo pipefail
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "platform-tools"
 
-      - name: Installer Cordova
-        run: npm install -g cordova@12
-
-      - name: Creer application Android
+      - name: Installer Cordova et outil icones
         run: |
-          cordova create application com.absabefi.puzzleenfant puzzle_enfant
-          cd application
-          cordova platform add android@14
+          npm install -g cordova@12 sharp-cli
 
-      - name: Copier le jeu et creer les icones
+      - name: Verifier les fichiers HTML
         shell: bash
         run: |
-          set -e
-          test -f index.html
-          test -f 'puzzle enfant.jpg'
-          cp index.html application/www/index.html
-          python3 -m pip install --user Pillow
-          python3 - <<'PY'
-          from PIL import Image, ImageOps
-          from pathlib import Path
-          source = Image.open('puzzle enfant.jpg').convert('RGB')
-          source = ImageOps.fit(source, (1024, 1024), method=Image.Resampling.LANCZOS)
-          folder = Path('application/res/icons/android')
-          folder.mkdir(parents=True, exist_ok=True)
-          for density, size in {'ldpi':36,'mdpi':48,'hdpi':72,'xhdpi':96,'xxhdpi':144,'xxxhdpi':192}.items():
-              source.resize((size,size), Image.Resampling.LANCZOS).save(folder / f'{density}.png')
-          PY
+          set -euo pipefail
+          test -f "$GITHUB_WORKSPACE/$SOURCE_DIR/index.html" || {
+            echo "::error::index.html introuvable dans le dossier source : $SOURCE_DIR"
+            exit 1
+          }
+          if [ -n "$ICON_PATH" ]; then
+            test -f "$GITHUB_WORKSPACE/$ICON_PATH" || {
+              echo "::error::Icone introuvable : $ICON_PATH"
+              exit 1
+            }
+          fi
 
-      - name: Configurer les icones Android
+      - name: Preparer le projet Cordova
+        shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import xml.etree.ElementTree as ET
-          path = Path('application/config.xml')
-          ns = 'http://www.w3.org/ns/widgets'
-          ET.register_namespace('', ns)
-          tree = ET.parse(path)
-          root = tree.getroot()
-          platform = next((x for x in root if x.tag == f'{{{ns}}}platform' and x.get('name') == 'android'), None)
-          if platform is None:
-              platform = ET.SubElement(root, f'{{{ns}}}platform', {'name':'android'})
-          for density in ('ldpi','mdpi','hdpi','xhdpi','xxhdpi','xxxhdpi'):
-              ET.SubElement(platform, f'{{{ns}}}icon', {'density':density,'src':f'res/icons/android/{density}.png'})
-          tree.write(path, encoding='utf-8', xml_declaration=True)
-          PY
+          set -euo pipefail
+          cordova create /tmp/mon-apk "$APP_ID" "$APP_NAME"
+          rm -rf /tmp/mon-apk/www
+          mkdir -p /tmp/mon-apk/www
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='platforms' \
+            --exclude='plugins' \
+            --exclude='config.xml' \
+            --exclude='package.json' \
+            "$GITHUB_WORKSPACE/$SOURCE_DIR/" /tmp/mon-apk/www/
+          test -f /tmp/mon-apk/www/index.html
 
-      - name: Construire APK
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = '/tmp/mon-apk/config.xml';
+          let xml = fs.readFileSync(path, 'utf8');
+          const escapeXml = s => s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          xml = xml.replace(/(<widget\b[^>]*\bversion=")[^"]*(")/, (_,a,b) => a+escapeXml(process.env.APP_VERSION)+b);
+          xml = xml.replace(/(<widget\b)/, (_,a) => a+' android-versionCode="'+process.env.APP_VERSION_CODE+'"');
+          const options = JSON.parse(process.env.XML_OPTIONS);
+          xml = xml.replace('</widget>', options.map(x=>'    '+x).join('\n')+'\n</widget>');
+          fs.writeFileSync(path,xml);
+          NODE
+
+      - name: Configurer l'icone
+        if: ${{ env.ICON_PATH != '' }}
+        shell: bash
         run: |
-          cd application
-          cordova prepare android
-          cordova build android --debug
+          set -euo pipefail
+          mkdir -p /tmp/mon-apk/res
+          sharp --input "$GITHUB_WORKSPACE/$ICON_PATH" --output /tmp/mon-apk/res/icon.png resize 1024 1024
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = '/tmp/mon-apk/config.xml';
+          let xml = fs.readFileSync(path,'utf8');
+          xml = xml.replace('</widget>','    <icon src="res/icon.png" />\n</widget>');
+          fs.writeFileSync(path,xml);
+          NODE
 
-      - name: Preparer APK
+      - name: Ajouter Android
+        working-directory: /tmp/mon-apk
+        run: cordova platform add android@14
+
+      - name: Installer les plugins selectionnes
+        working-directory: /tmp/mon-apk
+        shell: bash
         run: |
-          mkdir -p output
-          cp application/platforms/android/app/build/outputs/apk/debug/app-debug.apk output/puzzle_enfant.apk
+          set -euo pipefail
+          echo "Aucun plugin supplementaire"
 
-      - name: Publier APK
+      - name: Compiler APK
+        working-directory: /tmp/mon-apk
+        run: cordova build android --debug
+
+      - name: Sauvegarder APK
         uses: actions/upload-artifact@v4
         with:
-          name: puzzle_enfant
-          path: output/puzzle_enfant.apk
+          name: APK-Android
           if-no-files-found: error
+          path: /tmp/mon-apk/platforms/android/app/build/outputs/apk/debug/*.apk
